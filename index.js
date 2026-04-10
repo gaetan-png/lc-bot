@@ -22,7 +22,24 @@ console.log("Bericht gezien:", message.channel.id, message.author.tag, message.c
 
   const logChannel = await client.channels.fetch(process.env.LOG_CHANNEL_ID);
 
-  const title = message.content.split('\n')[0];
+  const lines = message.content
+  .split('\n')
+  .map(line => line.trim())
+  .filter(line => line !== '');
+
+let title = 'Geen titel gevonden';
+
+for (const line of lines) {
+  if (
+    line.startsWith('*') &&
+    line.endsWith('*') &&
+    !line.includes('Leeuwarder Courant') &&
+    !line.startsWith('***')
+  ) {
+    title = line.replace(/^\*+|\*+$/g, '');
+    break;
+  }
+}
 
   const log = `**Artikel gepubliceerd**
 
