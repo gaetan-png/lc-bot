@@ -6,7 +6,6 @@ const { Client, GatewayIntentBits, Events, Partials } = require('discord.js');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Web server voor Render (anders stopt hij)
 app.get('/', (_req, res) => {
   res.send('Bot is running');
 });
@@ -15,7 +14,6 @@ app.listen(PORT, () => {
   console.log(`Web server running on port ${PORT}`);
 });
 
-// Discord bot
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -34,7 +32,6 @@ client.once(Events.ClientReady, () => {
   console.log(`Bot online als ${client.user.tag}`);
 });
 
-// Bericht posten → log maken
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
   if (message.channel.id !== process.env.NEWS_CHANNEL_ID) return;
@@ -70,11 +67,9 @@ Nagekeken door: Nog niet ingevuld`;
   await logChannel.send(log);
 });
 
-// Reactie → meerdere mensen bij nagekeken door (werkt ook op oude logs)
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (user.bot) return;
 
-  // Fetch partials (voor oude berichten)
   if (reaction.partial) {
     try {
       await reaction.fetch();
@@ -100,14 +95,12 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 
   let newContent = message.content;
 
-  // Eerste checker
   if (newContent.includes('Nog niet ingevuld')) {
     newContent = newContent.replace(
       'Nog niet ingevuld',
       user.toString()
     );
   } else {
-    // Extra checkers toevoegen (geen duplicates)
     if (!newContent.includes(user.toString())) {
       newContent = newContent.replace(
         /Nagekeken door: (.*)/,
@@ -117,6 +110,54 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   }
 
   await message.edit(newContent);
+});
+
+client.on(Events.MessageReactionRemove, async (reaction, user) => {
+  if (user.bot) return;
+
+  if (reaction.partial) {
+    try {
+      await reaction.fetch();
+    } catch (error) {
+      console.error('Kon reactie niet ophalen:', error);
+      return;
+    }
+  }
+
+  const message = reaction.message;
+
+  if (message.partial) {
+    try {
+      await message.fetch();
+    } catch (error) {
+      console.error('Kon bericht niet ophalen:', error);
+      return;
+    }
+  }
+
+  if (reaction.emoji.name !== '✅') return;
+  if (!message.content.includes('Artikel gepubliceerd')) return;
+
+  let content = message.content;
+  const userTag = user.toString();
+
+  content = content.replace(`, ${userTag}`, '');
+  content = content.replace(`${userTag}, `, '');
+  content = content.replace(userTag, '');
+
+  const match = content.match(/Nagekeken door: (.*)/);
+  if (match) {
+    const reviewers = match[1].trim();
+
+    if (!reviewers) {
+      content = content.replace(
+        /Nagekeken door: .*/,
+        'Nagekeken door: Nog niet ingevuld'
+      );
+    }
+  }
+
+  await message.edit(content);
 });
 
 client.login(process.env.TOKEN);
