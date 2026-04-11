@@ -1,20 +1,21 @@
 require('dotenv').config();
 
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const {
   Client,
   GatewayIntentBits,
-  Events,
   Partials,
   REST,
   Routes,
-  SlashCommandBuilder
+  SlashCommandBuilder,
+  Events
 } = require('discord.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Web server voor hosting
 app.get('/', (_req, res) => {
   res.send('Bot is running');
 });
@@ -23,7 +24,37 @@ app.listen(PORT, () => {
   console.log(`Web server running on port ${PORT}`);
 });
 
-// Discord bot
+// ===== CONFIG =====
+const TOKEN = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
+const NEWS_CHANNEL_ID = process.env.NEWS_CHANNEL_ID;
+const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
+
+const DATA_FILE = path.join(__dirname, 'articleData.json');
+
+// ===== DATA =====
+function loadData() {
+  if (!fs.existsSync(DATA_FILE)) {
+    return { loggedMessages: {} };
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    if (!data.loggedMessages) data.loggedMessages = {};
+    return data;
+  } catch {
+    return { loggedMessages: {} };
+  }
+}
+
+function saveData(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+const db = loadData();
+
+// ===== CLIENT =====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -38,276 +69,143 @@ const client = new Client({
   ]
 });
 
-// Slash commands registreren
+// ===== COMMAND =====
 const commands = [
   new SlashCommandBuilder()
     .setName('artikelen')
-    .setDescription('Toon hoeveel artikelen iedereen deze maand heeft geschreven')
-].map(command => command.toJSON());
+    .setDescription('Toon aantal artikelen deze maand')
+].map(cmd => cmd.toJSON());
 
-const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
-
-async function registerCommands() {
-  try {
-    await rest.put(
-      Routes.applicationGuildCommands(
-        process.env.CLIENT_ID,
-        process.env.GUILD_ID
-      ),
-      { body: commands }
-    );
-    console.log('Slash commands geregistreerd');
-  } catch (error) {
-    console.error('Fout bij registreren slash commands:', error);
-  }
-}
-
-client.once(Events.ClientReady, async () => {
-  console.log(`Bot online als ${client.user.tag}`);
-  await registerCommands();
-});
-
-// Helpers
-function extractTitle(content) {
-  const lines = content
+// ===== HELPERS =====
+function getArticleTitle(message) {
+  const lines = (message.content || '')
     .split('\n')
-    .map(line => line.trim())
-    .filter(line => line !== '');
+    .map(l => l.trim())
+    .filter(Boolean);
 
-  for (const line of lines) {
-    if (
-      line.startsWith('*') &&
-      line.endsWith('*') &&
-      !line.includes('Leeuwarder Courant') &&
-      !line.startsWith('***')
-    ) {
-      return line.replace(/^\*+|\*+$/g, '');
-    }
-  }
+  const filtered = lines.filter(l => l !== 'Leeuwarder Courant ©');
 
-  return 'Geen titel gevonden';
+  return filtered[0] || 'Geen titel';
 }
 
-function extractAuthors(content, fallbackAuthorMention) {
-  // Zoek lijn "Geschreven door:"
-  const authorLine = content
-    .split('\n')
-    .map(line => line.trim())
-    .find(line => line.toLowerCase().startsWith('geschreven door:'));
-
-  if (!authorLine) {
-    return [fallbackAuthorMention];
-  }
-
-  const mentions = authorLine.match(/<@!?\d+>/g);
-
-  if (!mentions || mentions.length === 0) {
-    return [fallbackAuthorMention];
-  }
-
-  // Dubbels verwijderen
-  return [...new Set(mentions)];
+function extractChecked(content) {
+  const line = content.split('\n').find(l => l.startsWith('Nagekeken door:'));
+  if (!line) return [];
+  return [...line.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
 }
 
-function parseReviewersFromLog(content) {
-  const match = content.match(/Nagekeken door:\s*(.*)/);
-  if (!match) return [];
+function updateCheckedLine(content, users) {
+  const line = users.length
+    ? `Nagekeken door: ${users.map(id => `<@${id}>`).join(', ')}`
+    : 'Nagekeken door: -';
 
-  const raw = match[1].trim();
-  if (!raw || raw === 'Nog niet ingevuld') return [];
+  if (content.includes('Nagekeken door:')) {
+    return content.replace(/Nagekeken door:.*/g, line);
+  }
 
-  const mentions = raw.match(/<@!?\d+>/g);
-  return mentions ? [...new Set(mentions)] : [];
+  return content + '\n' + line;
 }
 
-// Bericht posten → log maken
-client.on(Events.MessageCreate, async (message) => {
+// ===== LOG =====
+async function makeLog(message) {
+  const logChannel = await message.guild.channels.fetch(LOG_CHANNEL_ID);
+
+  if (db.loggedMessages[message.id]) return;
+
+  const title = getArticleTitle(message);
+
+  const content =
+    `Artikel gepubliceerd\n` +
+    `Mention: <@${message.author.id}>\n` +
+    `Titel: ${title}\n` +
+    `Link naar artikel: ${message.url}\n` +
+    `Nagekeken door: -`;
+
+  await logChannel.send(content);
+
+  db.loggedMessages[message.id] = true;
+  saveData(db);
+}
+
+// ===== EVENTS =====
+
+// Nieuw artikel (bericht of forum post)
+client.on('messageCreate', async message => {
   if (message.author.bot) return;
-  if (message.channel.id !== process.env.NEWS_CHANNEL_ID) return;
+  if (message.channel.id !== NEWS_CHANNEL_ID) return;
 
-  const logChannel = await client.channels.fetch(process.env.LOG_CHANNEL_ID);
-  if (!logChannel || !logChannel.isTextBased()) return;
-
-  const title = extractTitle(message.content);
-  const authors = extractAuthors(message.content, message.author.toString());
-
-  const log = `**Artikel gepubliceerd**
-Mention: ${message.author}
-Auteurs: ${authors.join(', ')}
-Titel: ${title}
-Link naar artikel: ${message.url}
-Nagekeken door: Nog niet ingevuld`;
-
-  await logChannel.send(log);
+  await makeLog(message);
 });
 
-// Reactie toevoegen → reviewers toevoegen
-client.on(Events.MessageReactionAdd, async (reaction, user) => {
+// Reactie toevoegen
+client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
-
-  if (reaction.partial) {
-    try {
-      await reaction.fetch();
-    } catch (error) {
-      console.error('Kon reactie niet ophalen:', error);
-      return;
-    }
-  }
-
-  const message = reaction.message;
-
-  if (message.partial) {
-    try {
-      await message.fetch();
-    } catch (error) {
-      console.error('Kon bericht niet ophalen:', error);
-      return;
-    }
-  }
-
   if (reaction.emoji.name !== '✅') return;
-  if (!message.content.includes('Artikel gepubliceerd')) return;
 
-  const currentReviewers = parseReviewersFromLog(message.content);
-  const userMention = user.toString();
+  const msg = reaction.message;
+  if (msg.channel.id !== LOG_CHANNEL_ID) return;
 
-  if (currentReviewers.includes(userMention)) return;
+  let checked = extractChecked(msg.content);
 
-  const newReviewers = [...currentReviewers, userMention];
-  const replacement = newReviewers.length > 0
-    ? newReviewers.join(', ')
-    : 'Nog niet ingevuld';
+  if (!checked.includes(user.id)) {
+    if (checked.length >= 2) return;
+    checked.push(user.id);
+  }
 
-  const newContent = message.content.replace(
-    /Nagekeken door: .*/,
-    `Nagekeken door: ${replacement}`
-  );
-
-  await message.edit(newContent);
+  await msg.edit(updateCheckedLine(msg.content, checked));
 });
 
-// Reactie verwijderen → reviewer verwijderen
-client.on(Events.MessageReactionRemove, async (reaction, user) => {
+// Reactie verwijderen
+client.on('messageReactionRemove', async (reaction, user) => {
   if (user.bot) return;
-
-  if (reaction.partial) {
-    try {
-      await reaction.fetch();
-    } catch (error) {
-      console.error('Kon reactie niet ophalen:', error);
-      return;
-    }
-  }
-
-  const message = reaction.message;
-
-  if (message.partial) {
-    try {
-      await message.fetch();
-    } catch (error) {
-      console.error('Kon bericht niet ophalen:', error);
-      return;
-    }
-  }
-
   if (reaction.emoji.name !== '✅') return;
-  if (!message.content.includes('Artikel gepubliceerd')) return;
 
-  const userMention = user.toString();
-  const currentReviewers = parseReviewersFromLog(message.content);
-  const newReviewers = currentReviewers.filter(r => r !== userMention);
+  const msg = reaction.message;
+  if (msg.channel.id !== LOG_CHANNEL_ID) return;
 
-  const replacement = newReviewers.length > 0
-    ? newReviewers.join(', ')
-    : 'Nog niet ingevuld';
+  let checked = extractChecked(msg.content);
+  checked = checked.filter(id => id !== user.id);
 
-  const newContent = message.content.replace(
-    /Nagekeken door: .*/,
-    `Nagekeken door: ${replacement}`
-  );
-
-  await message.edit(newContent);
+  await msg.edit(updateCheckedLine(msg.content, checked));
 });
 
-// Slash command /artikelen
-client.on(Events.InteractionCreate, async (interaction) => {
+// Command
+client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== 'artikelen') return;
 
-  await interaction.deferReply();
+  if (interaction.commandName === 'artikelen') {
+    const channel = await interaction.guild.channels.fetch(LOG_CHANNEL_ID);
+    const messages = await channel.messages.fetch({ limit: 100 });
 
-  try {
-    const logChannel = await client.channels.fetch(process.env.LOG_CHANNEL_ID);
-    if (!logChannel || !logChannel.isTextBased()) {
-      return interaction.editReply('Logkanaal niet gevonden.');
-    }
-
-    const now = new Date();
     const counts = {};
-    let lastId;
 
-    while (true) {
-      const options = { limit: 100 };
-      if (lastId) options.before = lastId;
+    messages.forEach(msg => {
+      const match = msg.content.match(/<@!?(\d+)>/);
+      if (!match) return;
 
-      const messages = await logChannel.messages.fetch(options);
-      if (messages.size === 0) break;
-
-      for (const msg of messages.values()) {
-        if (!msg.content.includes('Artikel gepubliceerd')) continue;
-
-        const createdAt = msg.createdAt;
-        if (
-          createdAt.getMonth() !== now.getMonth() ||
-          createdAt.getFullYear() !== now.getFullYear()
-        ) {
-          continue;
-        }
-
-        // Eerst Auteurs-lijn proberen
-        const authorsMatch = msg.content.match(/Auteurs:\s*(.*)/);
-        let authors = [];
-
-        if (authorsMatch) {
-          const foundMentions = authorsMatch[1].match(/<@!?\d+>/g);
-          if (foundMentions) {
-            authors = [...new Set(foundMentions)];
-          }
-        }
-
-        // Fallback naar Mention als Auteurs ontbreekt
-        if (authors.length === 0) {
-          const mentionMatch = msg.content.match(/Mention:\s*(<@!?\d+>)/);
-          if (mentionMatch) {
-            authors = [mentionMatch[1]];
-          }
-        }
-
-        for (const author of authors) {
-          counts[author] = (counts[author] || 0) + 1;
-        }
-      }
-
-      lastId = messages.last().id;
-    }
-
-    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-
-    if (entries.length === 0) {
-      return interaction.editReply('Geen artikelen gevonden deze maand.');
-    }
-
-    let reply = '📊 **Artikelen deze maand**\n\n';
-
-    entries.forEach(([user, count], index) => {
-      reply += `${index + 1}. ${user} — ${count}\n`;
+      const id = match[1];
+      counts[id] = (counts[id] || 0) + 1;
     });
 
-    await interaction.editReply(reply);
-  } catch (error) {
-    console.error('Fout bij /artikelen:', error);
-    await interaction.editReply('Er ging iets fout bij het ophalen van de statistieken.');
+    let reply = '📰 **Artikelen:**\n\n';
+    for (const id in counts) {
+      reply += `<@${id}> — ${counts[id]}\n`;
+    }
+
+    interaction.reply(reply);
   }
 });
 
-client.login(process.env.TOKEN);
+// Ready
+client.once(Events.ClientReady, async clientReady => {
+  console.log(`Bot online als ${clientReady.user.tag}`);
+
+  const rest = new REST({ version: '10' }).setToken(TOKEN);
+
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+    { body: commands }
+  );
+});
+
+client.login(TOKEN);
