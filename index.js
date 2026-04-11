@@ -115,7 +115,7 @@ async function makeLog(message) {
   const title = getArticleTitle(message);
 
   const content =
-    `Artikel gepubliceerd\n` +
+    `**Artikel gepubliceerd**\n` +
     `Mention: <@${message.author.id}>\n` +
     `Titel: ${title}\n` +
     `Link naar artikel: ${message.url}\n` +
@@ -129,7 +129,7 @@ async function makeLog(message) {
 
 // ===== EVENTS =====
 
-// Nieuw artikel (bericht of forum post)
+// Nieuw artikel
 client.on('messageCreate', async message => {
   if (message.author.bot) return;
   if (message.channel.id !== NEWS_CHANNEL_ID) return;
