@@ -6,7 +6,7 @@ const { Client, GatewayIntentBits, Events } = require('discord.js');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Web server voor Render (anders stopt hij)
+// Web server voor Render
 app.get('/', (_req, res) => {
   res.send('Bot is running');
 });
@@ -37,7 +37,6 @@ client.on(Events.MessageCreate, async (message) => {
   const logChannel = await client.channels.fetch(process.env.LOG_CHANNEL_ID);
   if (!logChannel || !logChannel.isTextBased()) return;
 
-  // Titel zoeken
   const lines = message.content
     .split('\n')
     .map(line => line.trim())
@@ -57,7 +56,6 @@ client.on(Events.MessageCreate, async (message) => {
     }
   }
 
-  // Log bericht (GEEN witregel!)
   const log = `**Artikel gepubliceerd**
 Mention: ${message.author}
 Titel: ${title}
@@ -67,18 +65,30 @@ Nagekeken door: Nog niet ingevuld`;
   await logChannel.send(log);
 });
 
-// Reactie → nagekeken door invullen
+// Reactie → meerdere mensen bij nagekeken door
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (user.bot) return;
   if (reaction.emoji.name !== '✅') return;
 
   const message = reaction.message;
+
   if (!message.content.includes('Artikel gepubliceerd')) return;
 
-  const newContent = message.content.replace(
-    'Nog niet ingevuld',
-    user.toString()
-  );
+  let newContent = message.content;
+
+  if (newContent.includes('Nog niet ingevuld')) {
+    newContent = newContent.replace(
+      'Nog niet ingevuld',
+      user.toString()
+    );
+  } else {
+    if (!newContent.includes(user.toString())) {
+      newContent = newContent.replace(
+        /Nagekeken door: (.*)/,
+        (match, p1) => `Nagekeken door: ${p1}, ${user}`
+      );
+    }
+  }
 
   await message.edit(newContent);
 });
