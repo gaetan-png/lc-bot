@@ -1,12 +1,12 @@
 require('dotenv').config();
 
 const express = require('express');
-const { Client, GatewayIntentBits, Events } = require('discord.js');
+const { Client, GatewayIntentBits, Events, Partials } = require('discord.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Web server voor Render
+// Web server voor Render (anders stopt hij)
 app.get('/', (_req, res) => {
   res.send('Bot is running');
 });
@@ -22,6 +22,11 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.MessageContent
+  ],
+  partials: [
+    Partials.Message,
+    Partials.Channel,
+    Partials.Reaction
   ]
 });
 
@@ -65,23 +70,44 @@ Nagekeken door: Nog niet ingevuld`;
   await logChannel.send(log);
 });
 
-// Reactie → meerdere mensen bij nagekeken door
+// Reactie → meerdere mensen bij nagekeken door (werkt ook op oude logs)
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (user.bot) return;
-  if (reaction.emoji.name !== '✅') return;
+
+  // Fetch partials (voor oude berichten)
+  if (reaction.partial) {
+    try {
+      await reaction.fetch();
+    } catch (error) {
+      console.error('Kon reactie niet ophalen:', error);
+      return;
+    }
+  }
 
   const message = reaction.message;
 
+  if (message.partial) {
+    try {
+      await message.fetch();
+    } catch (error) {
+      console.error('Kon bericht niet ophalen:', error);
+      return;
+    }
+  }
+
+  if (reaction.emoji.name !== '✅') return;
   if (!message.content.includes('Artikel gepubliceerd')) return;
 
   let newContent = message.content;
 
+  // Eerste checker
   if (newContent.includes('Nog niet ingevuld')) {
     newContent = newContent.replace(
       'Nog niet ingevuld',
       user.toString()
     );
   } else {
+    // Extra checkers toevoegen (geen duplicates)
     if (!newContent.includes(user.toString())) {
       newContent = newContent.replace(
         /Nagekeken door: (.*)/,
