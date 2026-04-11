@@ -112,7 +112,7 @@ function updateCheckedLine(content, users) {
   return `${content}\n${checkedLine}`;
 }
 
-async function fetchAllMessages(channel, limit = 5000) {
+async function fetchAllMessages(channel, limit = 2000) {
   let allMessages = [];
   let lastId;
 
@@ -229,30 +229,27 @@ client.on('interactionCreate', async interaction => {
         return;
       }
 
-      const messages = await fetchAllMessages(channel, 5000);
+      const messages = await fetchAllMessages(channel, 2000);
       const now = new Date();
       const currentMonth = now.getMonth();
       const currentYear = now.getFullYear();
 
       const counts = {};
 
-      for (const msg of messages) {
+      messages.forEach(msg => {
         if (msg.createdAt.getMonth() !== currentMonth || msg.createdAt.getFullYear() !== currentYear) {
-          continue;
+          return;
         }
 
-        const mentionLine = msg.content
-          .split('\n')
-          .find(line => line.toLowerCase().startsWith('mention:'));
-
-        if (!mentionLine) continue;
+        const mentionLine = msg.content.split('\n').find(line => line.startsWith('Mention:'));
+        if (!mentionLine) return;
 
         const match = mentionLine.match(/<@!?(\d+)>/);
-        if (!match) continue;
+        if (!match) return;
 
-        const userId = match[1];
-        counts[userId] = (counts[userId] || 0) + 1;
-      }
+        const id = match[1];
+        counts[id] = (counts[id] || 0) + 1;
+      });
 
       const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
 
