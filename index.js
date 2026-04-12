@@ -30,23 +30,37 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const NEWS_CHANNEL_ID = process.env.NEWS_CHANNEL_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
+const AFMELD_CHANNEL_ID = process.env.AFMELD_CHANNEL_ID;
+const AFMELDINGEN_LOG_CHANNEL_ID = process.env.AFMELDINGEN_LOG_CHANNEL_ID;
 
 const DATA_FILE = path.join(__dirname, 'articleData.json');
 
 function loadData() {
   if (!fs.existsSync(DATA_FILE)) {
-    return { loggedMessages: {} };
+    return {
+      loggedMessages: {},
+      loggedAfmeldingen: {}
+    };
   }
 
   try {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+
     if (!data.loggedMessages || typeof data.loggedMessages !== 'object') {
-      return { loggedMessages: {} };
+      data.loggedMessages = {};
     }
+
+    if (!data.loggedAfmeldingen || typeof data.loggedAfmeldingen !== 'object') {
+      data.loggedAfmeldingen = {};
+    }
+
     return data;
   } catch (error) {
     console.error('Fout bij laden articleData.json:', error);
-    return { loggedMessages: {} };
+    return {
+      loggedMessages: {},
+      loggedAfmeldingen: {}
+    };
   }
 }
 
@@ -184,7 +198,6 @@ function getArticleTitle(message) {
 
 function extractChecked(content) {
   const lines = content.split('\n').map(line => line.trim());
-
   const line = lines.find(line => line.toLowerCase().startsWith('nagekeken door:'));
   if (!line) return [];
 
@@ -220,6 +233,43 @@ function extractAuthorIdFromLog(content) {
   }
 
   return null;
+}
+
+function extractAfmeldingInfo(content) {
+  const lines = content
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  let mention = null;
+  let startdatum = null;
+  let einddatum = null;
+  let reden = null;
+
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+
+    if (lower.startsWith('mention:')) {
+      const match = line.match(/<@!?(\d+)>/);
+      if (match) {
+        mention = match[1];
+      }
+    }
+
+    if (lower.startsWith('start:') || lower.startsWith('startdatum:')) {
+      startdatum = line.split(':').slice(1).join(':').trim();
+    }
+
+    if (lower.startsWith('eind:') || lower.startsWith('einddatum:')) {
+      einddatum = line.split(':').slice(1).join(':').trim();
+    }
+
+    if (lower.startsWith('reden:')) {
+      reden = line.split(':').slice(1).join(':').trim();
+    }
+  }
+
+  return { mention, startdatum, einddatum, reden };
 }
 
 async function fetchMessagesForMonth(channel, month, year) {
@@ -285,6 +335,34 @@ async function makeLog(message) {
   saveData(db);
 }
 
+async function makeAfmeldingLog(message, approvedByUser) {
+  const logChannel = await message.guild.channels.fetch(AFMELDINGEN_LOG_CHANNEL_ID).catch(() => null);
+  if (!logChannel || !logChannel.isTextBased()) {
+    console.error('Afmeldingen-logkanaal niet gevonden.');
+    return;
+  }
+
+  if (db.loggedAfmeldingen[message.id]) return;
+
+  const info = extractAfmeldingInfo(message.content || '');
+
+  const content =
+    `**Afmelding goedgekeurd**\n` +
+    `Mention: ${info.mention ? `<@${info.mention}>` : 'Onbekend'}\n` +
+    `Startdatum: ${info.startdatum || 'Onbekend'}\n` +
+    `Einddatum: ${info.einddatum || 'Onbekend'}\n` +
+    `Reden: ${info.reden || 'Geen reden opgegeven'}\n` +
+    `Goedgekeurd door: <@${approvedByUser.id}>\n` +
+    `Link naar afmelding: ${message.url}`;
+
+  const sentMessage = await logChannel.send({ content });
+
+  db.loggedAfmeldingen[message.id] = {
+    logMessageId: sentMessage.id
+  };
+  saveData(db);
+}
+
 client.on('messageCreate', async message => {
   try {
     if (message.author.bot) return;
@@ -320,6 +398,14 @@ client.on('messageReactionAdd', async (reaction, user) => {
     const msg = reaction.message;
     if (!msg) return;
     if (reaction.emoji.name !== '✅') return;
+
+    // Afmeldingen kanaal: bij goedkeuring loggen naar administratiekanaal
+    if (msg.channel.id === AFMELD_CHANNEL_ID) {
+      await makeAfmeldingLog(msg, user);
+      return;
+    }
+
+    // Artikellogs: nagekeken door updaten
     if (msg.channel.id !== LOG_CHANNEL_ID) return;
 
     let checked = extractChecked(msg.content);
