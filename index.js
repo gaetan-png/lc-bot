@@ -196,6 +196,19 @@ function getArticleTitle(message) {
   return 'Geen titel';
 }
 
+function extractAuthorsFromArticle(content) {
+  const lines = content.split('\n').map(line => line.trim());
+
+  const line = lines.find(line =>
+    line.toLowerCase().startsWith('geschreven door:')
+  );
+
+  if (!line) return [];
+
+  const ids = [...line.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
+  return [...new Set(ids)];
+}
+
 function extractChecked(content) {
   const lines = content.split('\n').map(line => line.trim());
   const line = lines.find(line => line.toLowerCase().startsWith('nagekeken door:'));
@@ -217,22 +230,14 @@ function updateCheckedLine(content, users) {
   return `${content}\n${checkedLine}`;
 }
 
-function extractAuthorIdFromLog(content) {
+function extractAuthorIdsFromLog(content) {
   const lines = content.split('\n').map(line => line.trim());
 
   const mentionLine = lines.find(line => line.toLowerCase().startsWith('mention:'));
-  if (mentionLine) {
-    const match = mentionLine.match(/<@!?(\d+)>/);
-    if (match) return match[1];
-  }
+  if (!mentionLine) return [];
 
-  const geschrevenDoorLine = lines.find(line => line.toLowerCase().startsWith('geschreven door:'));
-  if (geschrevenDoorLine) {
-    const match = geschrevenDoorLine.match(/<@!?(\d+)>/);
-    if (match) return match[1];
-  }
-
-  return null;
+  const ids = [...mentionLine.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
+  return [...new Set(ids)];
 }
 
 function extractAfmeldingInfo(content) {
@@ -251,9 +256,7 @@ function extractAfmeldingInfo(content) {
 
     if (lower.startsWith('mention:')) {
       const match = line.match(/<@!?(\d+)>/);
-      if (match) {
-        mention = match[1];
-      }
+      if (match) mention = match[1];
     }
 
     if (lower.startsWith('start:') || lower.startsWith('startdatum:')) {
@@ -319,10 +322,15 @@ async function makeLog(message) {
   if (db.loggedMessages[message.id]) return;
 
   const title = getArticleTitle(message);
+  const authors = extractAuthorsFromArticle(message.content || '');
+
+  const mentionLine = authors.length
+    ? authors.map(id => `<@${id}>`).join(', ')
+    : `<@${message.author.id}>`;
 
   const content =
     `**Artikel gepubliceerd**\n` +
-    `Mention: <@${message.author.id}>\n` +
+    `Mention: ${mentionLine}\n` +
     `Titel: ${title}\n` +
     `Link naar artikel: ${message.url}\n` +
     `Nagekeken door: -`;
@@ -470,10 +478,12 @@ client.on('interactionCreate', async interaction => {
       const counts = {};
 
       for (const msg of messages) {
-        const authorId = extractAuthorIdFromLog(msg.content);
-        if (!authorId) continue;
+        const authorIds = extractAuthorIdsFromLog(msg.content);
+        if (!authorIds.length) continue;
 
-        counts[authorId] = (counts[authorId] || 0) + 1;
+        for (const authorId of authorIds) {
+          counts[authorId] = (counts[authorId] || 0) + 1;
+        }
       }
 
       const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
