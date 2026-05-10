@@ -3,6 +3,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+
 const {
   Client,
   GatewayIntentBits,
@@ -14,6 +15,7 @@ const {
 } = require('discord.js');
 
 const app = express();
+
 const PORT = process.env.PORT || 3000;
 const TIMEZONE = 'Europe/Brussels';
 
@@ -36,6 +38,8 @@ const AFMELD_CHANNEL_ID = process.env.AFMELD_CHANNEL_ID;
 const AFMELDINGEN_LOG_THREAD_ID = process.env.AFMELDINGEN_LOG_THREAD_ID;
 
 const HOOFDREDACTIE_ROLE_ID = process.env.HOOFDREDACTIE_ROLE_ID;
+const MANAGEMENT_ROLE_ID = process.env.MANAGEMENT_ROLE_ID;
+const ASSISTENT_MANAGEMENT_ROLE_ID = process.env.ASSISTENT_MANAGEMENT_ROLE_ID;
 
 const DATA_FILE = path.join(__dirname, 'articleData.json');
 
@@ -122,8 +126,12 @@ const commands = [
     )
 ].map(cmd => cmd.toJSON());
 
-function hasHoofdredactieRole(interaction) {
-  return interaction.member.roles.cache.has(HOOFDREDACTIE_ROLE_ID);
+function canUseCommands(interaction) {
+  return (
+    interaction.member.roles.cache.has(HOOFDREDACTIE_ROLE_ID) ||
+    interaction.member.roles.cache.has(MANAGEMENT_ROLE_ID) ||
+    interaction.member.roles.cache.has(ASSISTENT_MANAGEMENT_ROLE_ID)
+  );
 }
 
 function getBrusselsDateParts(date) {
@@ -477,10 +485,10 @@ client.on('interactionCreate', async interaction => {
   if (
     (interaction.commandName === 'artikelen' ||
       interaction.commandName === 'nagekeken') &&
-    !hasHoofdredactieRole(interaction)
+    !canUseCommands(interaction)
   ) {
     await interaction.reply({
-      content: 'Alleen Hoofdredactie kan dit commando gebruiken.',
+      content: 'Je hebt geen toestemming om dit commando te gebruiken.',
       ephemeral: true
     });
 
