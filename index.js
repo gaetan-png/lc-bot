@@ -28,10 +28,14 @@ app.listen(PORT, () => {
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
+
 const NEWS_CHANNEL_ID = process.env.NEWS_CHANNEL_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
+
 const AFMELD_CHANNEL_ID = process.env.AFMELD_CHANNEL_ID;
 const AFMELDINGEN_LOG_THREAD_ID = process.env.AFMELDINGEN_LOG_THREAD_ID;
+
+const HOOFDREDACTIE_ROLE_ID = process.env.HOOFDREDACTIE_ROLE_ID;
 
 const DATA_FILE = path.join(__dirname, 'articleData.json');
 
@@ -46,17 +50,13 @@ function loadData() {
   try {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
 
-    if (!data.loggedMessages || typeof data.loggedMessages !== 'object') {
-      data.loggedMessages = {};
-    }
-
-    if (!data.loggedAfmeldingen || typeof data.loggedAfmeldingen !== 'object') {
-      data.loggedAfmeldingen = {};
-    }
+    if (!data.loggedMessages) data.loggedMessages = {};
+    if (!data.loggedAfmeldingen) data.loggedAfmeldingen = {};
 
     return data;
   } catch (error) {
     console.error('Fout bij laden articleData.json:', error);
+
     return {
       loggedMessages: {},
       loggedAfmeldingen: {}
@@ -91,7 +91,7 @@ const commands = [
     .addIntegerOption(option =>
       option
         .setName('maand')
-        .setDescription('Maandnummer (1 t.e.m. 12)')
+        .setDescription('Maandnummer')
         .setMinValue(1)
         .setMaxValue(12)
         .setRequired(false)
@@ -99,9 +99,7 @@ const commands = [
     .addIntegerOption(option =>
       option
         .setName('jaar')
-        .setDescription('Jaar, bv. 2026')
-        .setMinValue(2020)
-        .setMaxValue(2100)
+        .setDescription('Jaar')
         .setRequired(false)
     ),
 
@@ -111,7 +109,7 @@ const commands = [
     .addIntegerOption(option =>
       option
         .setName('maand')
-        .setDescription('Maandnummer (1 t.e.m. 12)')
+        .setDescription('Maandnummer')
         .setMinValue(1)
         .setMaxValue(12)
         .setRequired(false)
@@ -119,12 +117,14 @@ const commands = [
     .addIntegerOption(option =>
       option
         .setName('jaar')
-        .setDescription('Jaar, bv. 2026')
-        .setMinValue(2020)
-        .setMaxValue(2100)
+        .setDescription('Jaar')
         .setRequired(false)
     )
 ].map(cmd => cmd.toJSON());
+
+function hasHoofdredactieRole(interaction) {
+  return interaction.member.roles.cache.has(HOOFDREDACTIE_ROLE_ID);
+}
 
 function getBrusselsDateParts(date) {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -146,10 +146,10 @@ function getBrusselsDateParts(date) {
 function getRequestedMonthYear(interaction) {
   const nowParts = getBrusselsDateParts(new Date());
 
-  const month = interaction.options.getInteger('maand') ?? nowParts.month;
-  const year = interaction.options.getInteger('jaar') ?? nowParts.year;
-
-  return { month, year };
+  return {
+    month: interaction.options.getInteger('maand') ?? nowParts.month,
+    year: interaction.options.getInteger('jaar') ?? nowParts.year
+  };
 }
 
 function getDutchMonthName(month) {
@@ -168,13 +168,14 @@ function getDutchMonthName(month) {
     'december'
   ];
 
-  return names[month - 1] || 'onbekende maand';
+  return names[month - 1];
 }
 
 function getMonthStartEnd(month, year) {
-  const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
-  const end = new Date(year, month, 1, 0, 0, 0, 0);
-  return { start, end };
+  return {
+    start: new Date(year, month - 1, 1),
+    end: new Date(year, month, 1)
+  };
 }
 
 function getArticleTitle(message) {
@@ -188,7 +189,6 @@ function getArticleTitle(message) {
     if (line === 'Leeuwarder Courant ©') continue;
     if (line.startsWith('Geschreven door:')) continue;
     if (line.startsWith('Beeld:')) continue;
-    if (/^\d{2}-\d{2}-\d{4}, \d{2}:\d{2}$/.test(line)) continue;
 
     return line;
   }
@@ -206,16 +206,20 @@ function extractAuthorsFromArticle(content) {
   if (!line) return [];
 
   const ids = [...line.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
+
   return [...new Set(ids)];
 }
 
 function extractChecked(content) {
   const lines = content.split('\n').map(line => line.trim());
-  const line = lines.find(line => line.toLowerCase().startsWith('nagekeken door:'));
+
+  const line = lines.find(line =>
+    line.toLowerCase().startsWith('nagekeken door:')
+  );
+
   if (!line) return [];
 
-  const ids = [...line.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
-  return [...new Set(ids)];
+  return [...line.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
 }
 
 function updateCheckedLine(content, users) {
@@ -233,11 +237,13 @@ function updateCheckedLine(content, users) {
 function extractAuthorIdsFromLog(content) {
   const lines = content.split('\n').map(line => line.trim());
 
-  const mentionLine = lines.find(line => line.toLowerCase().startsWith('mention:'));
+  const mentionLine = lines.find(line =>
+    line.toLowerCase().startsWith('mention:')
+  );
+
   if (!mentionLine) return [];
 
-  const ids = [...mentionLine.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
-  return [...new Set(ids)];
+  return [...mentionLine.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
 }
 
 function extractAfmeldingInfo(content) {
@@ -259,15 +265,15 @@ function extractAfmeldingInfo(content) {
       if (match) mention = match[1];
     }
 
-    if (lower.startsWith('start:') || lower.startsWith('startdatum:')) {
+    if (lower.startsWith('start')) {
       startdatum = line.split(':').slice(1).join(':').trim();
     }
 
-    if (lower.startsWith('eind:') || lower.startsWith('einddatum:')) {
+    if (lower.startsWith('eind')) {
       einddatum = line.split(':').slice(1).join(':').trim();
     }
 
-    if (lower.startsWith('reden:')) {
+    if (lower.startsWith('reden')) {
       reden = line.split(':').slice(1).join(':').trim();
     }
   }
@@ -293,13 +299,11 @@ async function fetchMessagesForMonth(channel, month, year) {
     const messages = [...batch.values()];
 
     for (const msg of messages) {
-      const createdAt = msg.createdAt;
-
-      if (createdAt >= start && createdAt < end) {
+      if (msg.createdAt >= start && msg.createdAt < end) {
         allMessages.push(msg);
       }
 
-      if (createdAt < start) {
+      if (msg.createdAt < start) {
         keepFetching = false;
       }
     }
@@ -314,6 +318,7 @@ async function fetchMessagesForMonth(channel, month, year) {
 
 async function makeLog(message) {
   const logChannel = await message.guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+
   if (!logChannel || !logChannel.isTextBased()) {
     console.error('Logkanaal niet gevonden.');
     return;
@@ -322,6 +327,7 @@ async function makeLog(message) {
   if (db.loggedMessages[message.id]) return;
 
   const title = getArticleTitle(message);
+
   const authors = extractAuthorsFromArticle(message.content || '');
 
   const mentionLine = authors.length
@@ -340,6 +346,7 @@ async function makeLog(message) {
   db.loggedMessages[message.id] = {
     logMessageId: sentMessage.id
   };
+
   saveData(db);
 }
 
@@ -368,6 +375,7 @@ async function makeAfmeldingLog(message, approvedByUser) {
   db.loggedAfmeldingen[message.id] = {
     logMessageId: sentMessage.id
   };
+
   saveData(db);
 }
 
@@ -387,6 +395,7 @@ client.on('threadCreate', async thread => {
     if (thread.parentId !== NEWS_CHANNEL_ID) return;
 
     const starterMessage = await thread.fetchStarterMessage().catch(() => null);
+
     if (!starterMessage) return;
     if (starterMessage.author.bot) return;
 
@@ -404,11 +413,12 @@ client.on('messageReactionAdd', async (reaction, user) => {
       await reaction.fetch().catch(() => null);
     }
 
-    if (reaction.message?.partial) {
+    if (reaction.message.partial) {
       await reaction.message.fetch().catch(() => null);
     }
 
     const msg = reaction.message;
+
     if (!msg) return;
     if (reaction.emoji.name !== '✅') return;
 
@@ -423,6 +433,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
     if (!checked.includes(user.id)) {
       if (checked.length >= 2) return;
+
       checked.push(user.id);
     }
 
@@ -440,16 +451,18 @@ client.on('messageReactionRemove', async (reaction, user) => {
       await reaction.fetch().catch(() => null);
     }
 
-    if (reaction.message?.partial) {
+    if (reaction.message.partial) {
       await reaction.message.fetch().catch(() => null);
     }
 
     const msg = reaction.message;
+
     if (!msg) return;
     if (reaction.emoji.name !== '✅') return;
     if (msg.channel.id !== LOG_CHANNEL_ID) return;
 
     let checked = extractChecked(msg.content);
+
     checked = checked.filter(id => id !== user.id);
 
     await msg.edit(updateCheckedLine(msg.content, checked));
@@ -461,25 +474,38 @@ client.on('messageReactionRemove', async (reaction, user) => {
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
+  if (
+    (interaction.commandName === 'artikelen' ||
+      interaction.commandName === 'nagekeken') &&
+    !hasHoofdredactieRole(interaction)
+  ) {
+    await interaction.reply({
+      content: 'Alleen Hoofdredactie kan dit commando gebruiken.',
+      ephemeral: true
+    });
+
+    return;
+  }
+
   try {
     if (interaction.commandName === 'artikelen') {
       await interaction.deferReply();
 
       const channel = await interaction.guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+
       if (!channel || !channel.isTextBased()) {
         await interaction.editReply('Logkanaal niet gevonden.');
         return;
       }
 
       const { month, year } = getRequestedMonthYear(interaction);
-      const monthLabel = `${getDutchMonthName(month)} ${year}`;
+
       const messages = await fetchMessagesForMonth(channel, month, year);
 
       const counts = {};
 
       for (const msg of messages) {
         const authorIds = extractAuthorIdsFromLog(msg.content);
-        if (!authorIds.length) continue;
 
         for (const authorId of authorIds) {
           counts[authorId] = (counts[authorId] || 0) + 1;
@@ -489,37 +515,37 @@ client.on('interactionCreate', async interaction => {
       const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
 
       if (!entries.length) {
-        await interaction.editReply(`Er zijn geen artikelen gevonden voor ${monthLabel}.`);
+        await interaction.editReply('Geen artikelen gevonden.');
         return;
       }
 
-      let reply = `📰 **Artikelen in ${monthLabel}**\n\n`;
+      let reply = `📰 **Artikelen in ${getDutchMonthName(month)} ${year}**\n\n`;
+
       for (const [id, amount] of entries) {
         reply += `<@${id}> — ${amount}\n`;
       }
 
       await interaction.editReply(reply);
-      return;
     }
 
     if (interaction.commandName === 'nagekeken') {
       await interaction.deferReply();
 
       const channel = await interaction.guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+
       if (!channel || !channel.isTextBased()) {
         await interaction.editReply('Logkanaal niet gevonden.');
         return;
       }
 
       const { month, year } = getRequestedMonthYear(interaction);
-      const monthLabel = `${getDutchMonthName(month)} ${year}`;
+
       const messages = await fetchMessagesForMonth(channel, month, year);
 
       const counts = {};
 
       for (const msg of messages) {
         const checkedUsers = extractChecked(msg.content);
-        if (!checkedUsers.length) continue;
 
         for (const userId of checkedUsers) {
           counts[userId] = (counts[userId] || 0) + 1;
@@ -529,33 +555,31 @@ client.on('interactionCreate', async interaction => {
       const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
 
       if (!entries.length) {
-        await interaction.editReply(`Er zijn geen nagekeken artikelen gevonden voor ${monthLabel}.`);
+        await interaction.editReply('Geen nagekeken artikelen gevonden.');
         return;
       }
 
-      let reply = `✅ **Nagekeken in ${monthLabel}**\n\n`;
+      let reply = `✅ **Nagekeken in ${getDutchMonthName(month)} ${year}**\n\n`;
+
       for (const [id, amount] of entries) {
         reply += `<@${id}> — ${amount}\n`;
       }
 
       await interaction.editReply(reply);
-      return;
     }
   } catch (error) {
     console.error('Fout bij interactionCreate:', error);
 
     try {
       if (interaction.deferred || interaction.replied) {
-        await interaction.editReply('Er ging iets mis bij het uitvoeren van dit commando.');
+        await interaction.editReply('Er ging iets mis.');
       } else {
         await interaction.reply({
-          content: 'Er ging iets mis bij het uitvoeren van dit commando.',
+          content: 'Er ging iets mis.',
           ephemeral: true
         });
       }
-    } catch (replyError) {
-      console.error('Fout bij terugsturen van interaction response:', replyError);
-    }
+    } catch {}
   }
 });
 
